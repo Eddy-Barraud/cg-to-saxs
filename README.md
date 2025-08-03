@@ -144,7 +144,7 @@ The script generates several output files:
 - **Memory Usage**: The code uses FFT which can require significant RAM for large systems
 - **Optimization**: Includes optimized algorithms with kernel precomputation and chunked processing
 - **Scaling**: Handles systems from hundreds to thousands of beads efficiently
-- **Restart**: Use `restart=True` to cache intermediate results and speed up repeated calculations
+- **Restart**: Use `restart=True` to cache the trajectory reading step
 
 ## Example System
 
