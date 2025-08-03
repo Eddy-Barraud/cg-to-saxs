@@ -29,10 +29,10 @@ traj_path = f"{sys.argv[1]}"  # Path to trajectory file from command line argume
 
 # Set the q-max value for scattering calculation
 # Warning: The higher the q_max, the more computationally intensive the calculation
-q_max = 8e-1  # Maximum q value (1/Angstrom)
+q_max = 4  # Maximum q value (1/Angstrom)
 # q_min is automatically set based on box size (see below)
-dq=0.007                    # controls resolution of q values of the 1D output histogram
-density_method="dummy_in_cell"  # Method for density assignment: "default", "cic", "voxelization", "dummy_in_cell"
+dq=0.007                   # controls resolution of q values of the 1D output histogram
+density_method="voxelization"  # Method for density assignment: "default", "cic", "voxelization", "dummy_in_cell", "gaussian_in_cell"
 
 # Define which atom types to include in scattering calculation
 typestodo = np.array([1, 2, 3, 4, 5, 6])
@@ -123,7 +123,7 @@ if __name__ == '__main__':
         s_q_agg.append(avg_structure_factor)
 
     # Save computed intensity profiles to file
-    save_sq = basename + ".i_q.npz"
+    save_sq = basename + ".i_q_"+density_method+".npz"
     np.savez_compressed(save_sq, q_values_agg=q_values_agg, s_q_agg=s_q_agg, allow_pickle=False)
     print(f"\nSaved intensity profiles to {save_sq}")
 
@@ -158,7 +158,7 @@ if __name__ == '__main__':
     plt.tight_layout()
     
     # Save plot
-    plot_filename = basename + ".i_q.png"
+    plot_filename = basename + ".i_q_"+density_method+".png"
     plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
     print(f"Saved plot to {plot_filename}")
 
