@@ -1,5 +1,7 @@
 # CG-to-SAXS
 
+![SAXS Intensity Profile](example/trj.i_q_voxelization.png)
+
 This code reads LAMMPS dump trajectories from coarse-grained simulations and generates Small-Angle X-ray Scattering (SAXS) intensity profiles. It uses bead electron count and Fast Fourier Transforms (FFT) to compute structure factors and scattering intensities.
 
 ## Features
@@ -32,15 +34,15 @@ pip install numpy matplotlib zstandard
 Run the example with the provided trajectory file:
 
 ```bash
-python intensity_profile_gen.py trj.lammpsdump
+python intensity_profile_gen.py example/trj.lammpsdump
 ```
 
 This will:
-1. Read the LAMMPS trajectory file `trj.lammpsdump`
+1. Read the LAMMPS trajectory file `example/trj.lammpsdump`
 2. Calculate SAXS intensity using the default density method
 3. Generate output files:
-   - `trj.i_q_dummy_in_cell.npz` - Numerical results (q values and intensities)
-   - `trj.i_q_dummy_in_cell.png` - Publication-ready plot
+   - `example/trj.i_q_dummy_in_cell.npz` - Numerical results (q values and intensities)
+   - `example/trj.i_q_dummy_in_cell.png` - Publication-ready plot
 
 ## Density Assignment Methods
 
@@ -144,7 +146,13 @@ The script generates several output files:
 
 ## Example System
 
-The included `trj.lammpsdump` file contains a sample coarse-grained trajectory that demonstrates the code's capabilities. This trajectory includes multiple bead types with different electron counts and radii.
+The included `example/trj.lammpsdump` file contains a sample coarse-grained trajectory that demonstrates the code's capabilities. This trajectory includes multiple bead types with different electron counts and radii.
+
+The `example/` folder also contains pre-generated output files showing results from different density methods:
+- `trj.i_q_voxelization.png` - High-accuracy sphere sampling results
+- `trj.i_q_gaussian_in_cell.png` - Smooth Gaussian density profiles  
+- `trj.i_q_dummy_in_cell.png` - Random sampling results
+- And corresponding `.npz` data files
 
 ## Troubleshooting
 
