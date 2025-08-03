@@ -1,6 +1,6 @@
 # CG-to-SAXS
 
-This code reads LAMMPS dump trajectories from coarse-grained simulations and generates Small-Angle X-ray Scattering (SAXS) intensity profiles. It uses bead-based electron density assignments and Fast Fourier Transforms (FFT) to compute structure factors and scattering intensities.
+This code reads LAMMPS dump trajectories from coarse-grained simulations and generates Small-Angle X-ray Scattering (SAXS) intensity profiles. It uses bead electron count and Fast Fourier Transforms (FFT) to compute structure factors and scattering intensities.
 
 ## Features
 
@@ -56,6 +56,8 @@ The code provides several methods for assigning coarse-grained beads to electron
 
 ## Configuration
 
+### Script Parameters
+
 Edit the parameters in `intensity_profile_gen.py`:
 
 ```python
@@ -71,6 +73,33 @@ skip_every_ts = 1           # Process every nth timestep
 # System parameters
 typestodo = np.array([1, 2, 3, 4, 5, 6])  # Atom types to include
 ```
+
+### Bead Properties
+
+Configure electron counts and radii for each bead type in `workers.py`:
+
+```python
+# Electron counts per bead type (customize for your system)
+type_weight = np.array([
+    (16+3*8),      # Type 1: S + 3O atoms = 40 electrons
+    (2*6+3*9+8),   # Type 2: 2C + 3F + O atoms = 47 electrons  
+    (2*6+4*9),     # Type 3: 2C + 4F atoms = 48 electrons
+    (2*6+4*9),     # Type 4: 2C + 4F atoms = 48 electrons
+    (3*8+7*1),     # Type 5: 3O + 7H atoms = 31 electrons
+    (3*8+6*1)      # Type 6: 3O + 6H atoms = 30 electrons
+]).astype(np.int32)
+
+# Bead radii in Angstroms (customize for your system)
+type_radius = np.array([0.361, 0.400, 0.385, 0.385, 0.381, 0.381]) * rc
+
+# Conversion factor from reduced units to Angstroms
+rc = 6.589  # Adjust if using different unit system
+```
+
+**Important**: Modify these arrays to match your specific coarse-grained model:
+- `type_weight`: Total electron count for each bead type
+- `type_radius`: Effective spherical radius for each bead type
+- Array indices correspond to LAMMPS atom types (starting from type 1)
 
 ## Advanced Usage
 
