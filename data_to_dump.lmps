@@ -1,0 +1,5 @@
+atom_style full 
+
+read_data 7.eq.done.data
+
+write_dump all custom trj.lammpsdump id mol type x y z ix iy iz
