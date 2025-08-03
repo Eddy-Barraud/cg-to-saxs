@@ -129,8 +129,10 @@ For large systems, the code automatically uses chunked processing. You can monit
 The script generates several output files:
 
 - **`.npz` files**: NumPy archives containing:
-  - `q_values`: Scattering vector magnitudes (1/Å)
-  - `intensity`: Calculated SAXS intensities
+  - `trj.npz`: the trajectory in Numpy format, for fast restart
+  - `trj.i_q.npz`
+    - `q_values`: Scattering vector magnitudes (1/Å)
+    - `intensity`: Calculated SAXS intensities
   
 - **`.png` files**: High-resolution plots showing:
   - Log-log plot of intensity vs. q
@@ -157,17 +159,15 @@ The `example/` folder also contains pre-generated output files showing results f
 ## Troubleshooting
 
 ### Memory Issues
-- Reduce `q_max` or increase `dq` to lower grid resolution
+- Reduce `q_max` to lower grid resolution
 - Use `skip_every_ts > 1` to process fewer timesteps
-- Enable restart functionality to cache intermediate results
+- Enable restart functionality to read back the trajectory faster
 
 ### Performance Issues  
 - Try different density methods - `voxelization` is often fastest
-- For very large systems, `dummy_in_cell` provides good speed/accuracy balance
-- Monitor output for optimization messages
 
 ### File Format Issues
-- Ensure LAMMPS dump files include positions and atom types
+- Ensure LAMMPS dump files include these columns "id mol type x y z ix iy iz"
 - Check that atom type numbering starts from 1
 - Verify trajectory file is not corrupted
 
@@ -179,5 +179,3 @@ The code implements several advanced optimizations:
 - **Chunked Processing**: Memory-efficient processing of large bead systems  
 - **FFT Optimization**: Efficient structure factor calculations using NumPy's FFT
 - **Electron Conservation**: All methods maintain perfect electron count conservation
-
-For detailed performance benchmarks and technical specifications, see the included benchmark scripts.
