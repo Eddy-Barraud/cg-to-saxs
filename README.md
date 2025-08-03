@@ -20,6 +20,7 @@ This code reads LAMMPS dump trajectories from coarse-grained simulations and gen
 - NumPy
 - Matplotlib
 - zstandard (for compressed file support)
+- LAMMPS dump trajectory (example: `dump trj all custom 100000 trj.lammpsdump id mol type x y z ix iy iz`)
 
 ### Installation
 
