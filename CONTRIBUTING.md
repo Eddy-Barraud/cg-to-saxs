@@ -1,1 +1,1 @@
-Pierre Levitz
+Pierre Levitz, PHENIX Laboratory, Sorbonne University --> Conceptualization of the code, interpretation of results and validation.
