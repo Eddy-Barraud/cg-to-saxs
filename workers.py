@@ -10,10 +10,10 @@ rc = 6.589  # Angstroms, conversion factor from reduced units to Angstroms
 # SAXS electron form factors for each bead type
 # Format: [S atoms + C atoms + H atoms + O atoms]
 type_weight = np.array([
-    (16+3*8),      # Type 1: S + 3O atoms  
+    (16+3*8),      # Type 1: S + 3O atoms
     (2*6+3*9+8),   # Type 2: 2C + 3F + O atoms
     (2*6+4*9),     # Type 3: 2C + 4F atoms
-    (2*6+4*9),     # Type 4: 2C + 4F atoms  
+    (2*6+4*9),     # Type 4: 2C + 4F atoms
     (3*8+7*1),     # Type 5: 3O + 7H atoms
     (3*8+6*1)      # Type 6: 3O + 6H atoms
 ]).astype(np.int32)  # Electron counts per bead type
@@ -24,14 +24,43 @@ type_radius = np.array([0.361, 0.400, 0.385, 0.385, 0.381, 0.381]) * rc
 # Solvent electron density (water background)
 rho_0 = 30/(6.36**3)  # electrons/A^3 for DPD water beads
 
+# Global cache for precomputed Gaussian kernels
+_gaussian_kernel_cache = {}
+
+
+def _cache_key_for_gaussian_kernels(unique_radii, grid_spacings):
+    """
+    Create a hashable cache key for Gaussian kernel parameters.
+
+    Parameters:
+    -----------
+    unique_radii : np.ndarray
+        Unique bead radii
+    grid_spacings : tuple
+        Grid spacing in each dimension (dx, dy, dz)
+
+    Returns:
+    --------
+    tuple : Hashable cache key
+    """
+    # Convert numpy array to tuple for hashing, round to avoid floating point precision issues
+    # Sort the radii and round to handle floating point precision
+    radii_sorted = np.sort(unique_radii)
+    radii_tuple = tuple(np.round(radii_sorted, decimals=8))
+
+    # Round grid spacings more aggressively to handle small variations in NPT simulations
+    # Use fewer decimals to group similar grid spacings together
+    # Round to nearest 0.01 to handle NPT box fluctuations
+    spacings_tuple = tuple(np.round(np.array(grid_spacings), decimals=2))
+    return (radii_tuple, spacings_tuple)
 
 def cloud_in_cell_vectorized(density_beads, density_weights, num_points_x, num_points_y, num_points_z, Lx, Ly, Lz):
     """
     Vectorized implementation of the Cloud-in-Cell (CIC) method for density interpolation.
-    
+
     This method distributes particle densities onto a regular grid by interpolating
     each particle's contribution to the 8 nearest grid points using trilinear interpolation.
-    
+
     Parameters:
     -----------
     density_beads : np.ndarray
@@ -42,7 +71,7 @@ def cloud_in_cell_vectorized(density_beads, density_weights, num_points_x, num_p
         Grid dimensions in each direction
     Lx, Ly, Lz : float
         Box dimensions in Angstroms
-        
+
     Returns:
     --------
     electron_density : np.ndarray
@@ -143,7 +172,7 @@ def generate_points_in_sphere(center, radius, num_points):
     if n_r < 2:
         n_r = 2
     # Reserve one point for center, distribute rest among shells
-    points_per_shell = int(np.ceil((num_points-1) / (n_r-1)))  
+    points_per_shell = int(np.ceil((num_points-1) / (n_r-1)))
     n_theta = int(np.sqrt(points_per_shell))
     n_phi = int(np.ceil(points_per_shell / n_theta))
 
@@ -152,12 +181,12 @@ def generate_points_in_sphere(center, radius, num_points):
     r = r_lin ** (1/3)  # Cube root scaling for uniform volume density
 
     # Uniform grid in angles (skip theta=0 to avoid duplicate pole points)
-    theta = np.linspace(0, np.pi, n_theta, endpoint=False)[1:]  
+    theta = np.linspace(0, np.pi, n_theta, endpoint=False)[1:]
     phi = np.linspace(0, 2*np.pi, n_phi, endpoint=False)
 
     # Start with center point
-    points = [np.array(center)]  
-    
+    points = [np.array(center)]
+
     # Generate points on each spherical shell
     for ri in r[1:]:  # skip r=0 (center already included)
         for ti in theta:
@@ -181,18 +210,18 @@ def generate_points_in_sphere(center, radius, num_points):
 def voxels_in_cell(density_beads, density_weights, beads_radius, num_points_per_sphere, num_points_x, num_points_y, num_points_z, Lx, Ly, Lz):
     """
     Voxelization method for density assignment using spherical volume sampling.
-    
+
     OPTIMIZED VERSION: Uses chunked processing to reduce memory usage and improve performance.
-    
+
     This method represents each bead as a sphere and samples points within that sphere
     to create a more accurate representation of the bead's finite size and shape.
     Uses chunked processing similar to dummy_in_cell for memory efficiency.
-    
+
     Parameters:
     -----------
     density_beads : np.ndarray
         Bead center positions (N, 3)
-    density_weights : np.ndarray  
+    density_weights : np.ndarray
         Bead electron weights (N,)
     beads_radius : np.ndarray
         Radius of each bead (N,)
@@ -202,7 +231,7 @@ def voxels_in_cell(density_beads, density_weights, beads_radius, num_points_per_
         Grid dimensions
     Lx, Ly, Lz : float
         Box dimensions
-        
+
     Returns:
     --------
     electron_density : np.ndarray
@@ -211,52 +240,52 @@ def voxels_in_cell(density_beads, density_weights, beads_radius, num_points_per_
         Grid edge positions
     """
     n_beads = density_beads.shape[0]
-    
+
     # Calculate optimal chunk size to limit memory usage (aim for ~100MB chunks)
     total_voxel_points = n_beads * num_points_per_sphere
     target_chunk_size = min(1000000, total_voxel_points)  # Max 1M voxel points per chunk
     chunk_size = max(1, target_chunk_size // num_points_per_sphere)  # Number of beads per chunk
-    
+
     # Pre-calculate bin edges for efficiency
     x_edges = np.linspace(0, Lx, num_points_x + 1)
     y_edges = np.linspace(0, Ly, num_points_y + 1)
     z_edges = np.linspace(0, Lz, num_points_z + 1)
     voxel_edges = [x_edges, y_edges, z_edges]
-    
+
     # Generate unit sphere points once (radius = 1.0) - shared across all chunks
     sphere_points = generate_points_in_sphere(center=[0, 0, 0], radius=1.0, num_points=num_points_per_sphere)
     num_points_per_sphere = sphere_points.shape[0]  # Update count in case of padding
-    
+
     # Initialize the electron density grid
     electron_density = np.zeros((num_points_x, num_points_y, num_points_z), dtype=np.float64)
-    
+
     # Process beads in chunks to reduce memory usage
     for chunk_start in range(0, n_beads, chunk_size):
         chunk_end = min(chunk_start + chunk_size, n_beads)
-        
+
         # Extract chunk data
         chunk_positions = density_beads[chunk_start:chunk_end]
         chunk_weights = density_weights[chunk_start:chunk_end]
         chunk_radii = beads_radius[chunk_start:chunk_end]
-        
+
         # Scale sphere points by each bead's radius in this chunk
         # Broadcasting: (1, num_points_per_sphere, 3) * (chunk_n_beads, 1, 1) -> (chunk_n_beads, num_points_per_sphere, 3)
         sphere_points_scaled = sphere_points[None, :, :] * chunk_radii[:, None, None]
-        
+
         # Generate all partial bead positions by adding scaled sphere points to bead centers
         # shape: (chunk_n_beads, num_points_per_sphere, 3)
         chunk_partial_beads = chunk_positions[:, None, :] + sphere_points_scaled
         # Reshape to (chunk_n_beads * num_points_per_sphere, 3) for histogramming
         chunk_partial_beads = chunk_partial_beads.reshape(-1, 3)
-        
+
         # Distribute weights evenly among all sample points within each bead in this chunk
         chunk_partial_weights = np.repeat(chunk_weights / num_points_per_sphere, num_points_per_sphere)
-        
+
         # Apply periodic boundary conditions in-place
         chunk_partial_beads[:, 0] %= Lx
         chunk_partial_beads[:, 1] %= Ly
         chunk_partial_beads[:, 2] %= Lz
-        
+
         # Add this chunk's contribution to the density grid
         chunk_density, _ = np.histogramdd(
             chunk_partial_beads,
@@ -265,30 +294,30 @@ def voxels_in_cell(density_beads, density_weights, beads_radius, num_points_per_
             weights=chunk_partial_weights,
             density=False
         )
-        
+
         # Accumulate density (in-place addition)
         electron_density += chunk_density
-        
+
         # Clean up chunk arrays to free memory immediately
         del sphere_points_scaled, chunk_partial_beads, chunk_partial_weights, chunk_density
         del chunk_positions, chunk_weights, chunk_radii
-        
+
         # Force garbage collection to free memory immediately
         gc.collect()
 
     return electron_density, voxel_edges
 
 def dummy_in_cell(beads_positions, beads_weights, beads_radius,
-                  num_dummies, num_points_x, num_points_y, num_points_z, 
+                  num_dummies, num_points_x, num_points_y, num_points_z,
                   box_lengths):
     """
     Dummy particle method for density assignment using random sampling within spheres.
-    
+
     OPTIMIZED VERSION: Uses chunked processing to reduce memory usage and improve performance.
-    
+
     This method creates multiple random "dummy" particles within each bead's spherical volume
     to represent the electron density distribution. Uses uniform random sampling within spheres.
-    
+
     Parameters:
     -----------
     beads_positions : np.ndarray
@@ -303,7 +332,7 @@ def dummy_in_cell(beads_positions, beads_weights, beads_radius,
         Grid dimensions
     box_lengths : np.ndarray
         Box dimensions (3,)
-        
+
     Returns:
     --------
     electron_density : np.ndarray
@@ -313,60 +342,60 @@ def dummy_in_cell(beads_positions, beads_weights, beads_radius,
     """
     Lx, Ly, Lz = box_lengths
     n_beads = beads_positions.shape[0]
-    
+
     # Calculate optimal chunk size to limit memory usage (aim for ~100MB chunks)
     total_dummies = n_beads * num_dummies
     target_chunk_size = min(1000000, total_dummies)  # Max 1M dummy particles per chunk
     chunk_size = max(1, target_chunk_size // num_dummies)  # Number of beads per chunk
-    
+
     # Pre-calculate bin edges for efficiency
     x_edges = np.linspace(0, Lx, num_points_x + 1)
     y_edges = np.linspace(0, Ly, num_points_y + 1)
     z_edges = np.linspace(0, Lz, num_points_z + 1)
     voxel_edges = [x_edges, y_edges, z_edges]
-    
+
     # Initialize the electron density grid
     electron_density = np.zeros((num_points_x, num_points_y, num_points_z), dtype=np.float64)
-    
+
     # Process beads in chunks to reduce memory usage
     for chunk_start in range(0, n_beads, chunk_size):
         chunk_end = min(chunk_start + chunk_size, n_beads)
         chunk_n_beads = chunk_end - chunk_start
-        
+
         # Extract chunk data
         chunk_positions = beads_positions[chunk_start:chunk_end]
         chunk_weights = beads_weights[chunk_start:chunk_end]
         chunk_radii = beads_radius[chunk_start:chunk_end]
-        
+
         # Generate dummy particles for this chunk only
         chunk_total_dummies = chunk_n_beads * num_dummies
-        
+
         # Generate random directions using optimized approach
         # Use more efficient random number generation
         rand_dirs = np.random.standard_normal((chunk_total_dummies, 3))
         # Normalize in-place to save memory
         norms = np.linalg.norm(rand_dirs, axis=1, keepdims=True)
         rand_dirs /= norms
-        
+
         # Generate random radii with optimized memory usage
         rand_uniform = np.random.random(chunk_total_dummies)
         rand_radii = np.cbrt(rand_uniform)  # Cube root for uniform volume distribution
-        
+
         # Expand bead data for dummy particles (more memory efficient)
         bead_indices = np.repeat(np.arange(chunk_n_beads), num_dummies)
         chunk_bead_positions = chunk_positions[bead_indices]
         chunk_bead_radii = chunk_radii[bead_indices]
         chunk_bead_weights = chunk_weights[bead_indices] / num_dummies
-        
+
         # Calculate dummy positions more efficiently
         scaled_offsets = rand_dirs * (rand_radii[:, np.newaxis] * chunk_bead_radii[:, np.newaxis])
         dummy_positions = chunk_bead_positions + scaled_offsets
-        
+
         # Apply periodic boundary conditions in-place
         dummy_positions[:, 0] %= Lx
-        dummy_positions[:, 1] %= Ly  
+        dummy_positions[:, 1] %= Ly
         dummy_positions[:, 2] %= Lz
-        
+
         # Add this chunk's contribution to the density grid
         chunk_density, _ = np.histogramdd(
             dummy_positions,
@@ -375,14 +404,14 @@ def dummy_in_cell(beads_positions, beads_weights, beads_radius,
             weights=chunk_bead_weights,
             density=False
         )
-        
+
         # Accumulate density (in-place addition)
         electron_density += chunk_density
-        
+
         # Clean up chunk arrays to free memory immediately
         del rand_dirs, rand_uniform, rand_radii, scaled_offsets, dummy_positions, chunk_density
         del bead_indices, chunk_bead_positions, chunk_bead_radii, chunk_bead_weights
-        
+
         # Force garbage collection to free memory immediately
         gc.collect()
 
@@ -391,18 +420,19 @@ def dummy_in_cell(beads_positions, beads_weights, beads_radius,
 
 def precompute_gaussian_kernels(unique_radii, grid_spacings):
     """
-    Precompute 3D Gaussian kernels for all unique bead radii.
-    
+    Precompute 3D Gaussian kernels for all unique bead radii with caching.
+
     This function creates optimized Gaussian kernels that can be placed at bead positions
     using fast convolution methods, avoiding repeated exponential calculations.
-    
+    Results are cached to avoid recomputation for identical parameters.
+
     Parameters:
     -----------
     unique_radii : np.ndarray
         Unique bead radii in the system
     grid_spacings : tuple
         Grid spacing in each dimension (dx, dy, dz)
-        
+
     Returns:
     --------
     kernels : dict
@@ -410,48 +440,61 @@ def precompute_gaussian_kernels(unique_radii, grid_spacings):
     kernel_extents : dict
         Dictionary mapping radius to kernel size (for placement)
     """
+    # Check cache first
+    cache_key = _cache_key_for_gaussian_kernels(unique_radii, grid_spacings)
+    #print(f"   Cache key: {cache_key}")
+    #print(f"   Cache has {len(_gaussian_kernel_cache)} entries")
+    if cache_key in _gaussian_kernel_cache:
+        print(f"   Using cached Gaussian kernels for {len(unique_radii)} unique radii")
+        return _gaussian_kernel_cache[cache_key]
+
+    print(f"   Computing new Gaussian kernels for {len(unique_radii)} unique radii")
     kernels = {}
     kernel_extents = {}
     dx, dy, dz = grid_spacings
-    
+
     for radius in unique_radii:
         sigma = radius / 3.0  # 3-sigma rule
-        
+
         # Determine kernel size (extend to 3*sigma in each direction)
         # Add 1 to ensure odd dimensions for centered kernels
         nx = 2 * int(np.ceil(3 * sigma / dx)) + 1
         ny = 2 * int(np.ceil(3 * sigma / dy)) + 1
         nz = 2 * int(np.ceil(3 * sigma / dz)) + 1
-        
+
         # Create coordinate grids centered at kernel center
         x = np.arange(nx) * dx - (nx // 2) * dx
         y = np.arange(ny) * dy - (ny // 2) * dy
         z = np.arange(nz) * dz - (nz // 2) * dz
-        
+
         # Create 3D meshgrid
         X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-        
+
         # Calculate squared distances
         r_squared = X**2 + Y**2 + Z**2
         r = np.sqrt(r_squared)
-        
+
         # Apply radius cutoff
         mask = r <= radius
-        
+
         # Create Gaussian kernel
         kernel = np.zeros((nx, ny, nz), dtype=np.float64)
         if np.any(mask):
             gaussian_values = np.exp(-r_squared[mask] / (2 * sigma**2))
             kernel[mask] = gaussian_values
-            
+
             # Normalize kernel to unit weight for later scaling
             total_weight = np.sum(kernel)
             if total_weight > 0:
                 kernel /= total_weight
-        
+
         kernels[radius] = kernel
         kernel_extents[radius] = (nx, ny, nz)
-    
+
+    # Cache the results for future use
+    result = (kernels, kernel_extents)
+    _gaussian_kernel_cache[cache_key] = result
+
     return kernels, kernel_extents
 
 
@@ -459,12 +502,12 @@ def gaussian_in_cell(beads_positions, beads_weights, beads_radius,
                     num_points_x, num_points_y, num_points_z, box_lengths):
     """
     Optimized Gaussian density method using precomputed kernels and fast placement.
-    
+
     This method represents each bead as a sphere with a Gaussian electron density distribution
     using precomputed 3D Gaussian kernels to avoid repeated exponential calculations.
-    The standard deviation is set to radius/3 so that 99.7% of the density is contained 
+    The standard deviation is set to radius/3 so that 99.7% of the density is contained
     within the bead radius (3-sigma rule).
-    
+
     Parameters:
     -----------
     beads_positions : np.ndarray
@@ -477,7 +520,7 @@ def gaussian_in_cell(beads_positions, beads_weights, beads_radius,
         Grid dimensions
     box_lengths : np.ndarray
         Box dimensions (3,)
-        
+
     Returns:
     --------
     electron_density : np.ndarray
@@ -487,54 +530,54 @@ def gaussian_in_cell(beads_positions, beads_weights, beads_radius,
     """
     Lx, Ly, Lz = box_lengths
     n_beads = beads_positions.shape[0]
-    
+
     # Pre-calculate grid coordinates and spacing
     x_edges = np.linspace(0, Lx, num_points_x + 1)
     y_edges = np.linspace(0, Ly, num_points_y + 1)
     z_edges = np.linspace(0, Lz, num_points_z + 1)
     voxel_edges = [x_edges, y_edges, z_edges]
-    
+
     dx = Lx / num_points_x
     dy = Ly / num_points_y
     dz = Lz / num_points_z
     grid_spacings = (dx, dy, dz)
-    
+
     # Initialize the electron density grid
     electron_density = np.zeros((num_points_x, num_points_y, num_points_z), dtype=np.float64)
-    
+
     # Find unique radii and precompute kernels
     unique_radii = np.unique(beads_radius)
     print(f"   Precomputing {len(unique_radii)} Gaussian kernels for unique bead radii...")
     kernels, kernel_extents = precompute_gaussian_kernels(unique_radii, grid_spacings)
-    
+
     # Group beads by radius for efficient processing
     radius_to_beads = {}
     for i, radius in enumerate(beads_radius):
         if radius not in radius_to_beads:
             radius_to_beads[radius] = []
         radius_to_beads[radius].append(i)
-    
+
     # Process beads grouped by radius
     for radius, bead_indices in radius_to_beads.items():
         kernel = kernels[radius]
         nx, ny, nz = kernel_extents[radius]
-        
+
         # Process all beads with this radius
         for bead_idx in bead_indices:
             bead_pos = beads_positions[bead_idx]
             bead_weight = beads_weights[bead_idx]
-            
+
             # Calculate grid indices for bead center
             ix_center = int(np.round(bead_pos[0] / dx))
             iy_center = int(np.round(bead_pos[1] / dy))
             iz_center = int(np.round(bead_pos[2] / dz))
-            
+
             # Calculate kernel placement bounds
             ix_start = ix_center - nx // 2
             iy_start = iy_center - ny // 2
             iz_start = iz_center - nz // 2
-            
-            
+
+
             # Handle periodic boundary conditions and grid bounds
             for kx in range(nx):
                 for ky in range(ny):
@@ -543,10 +586,10 @@ def gaussian_in_cell(beads_positions, beads_weights, beads_radius,
                         ix = (ix_start + kx) % num_points_x
                         iy = (iy_start + ky) % num_points_y
                         iz = (iz_start + kz) % num_points_z
-                        
+
                         # Add scaled kernel contribution
                         electron_density[ix, iy, iz] += bead_weight * kernel[kx, ky, kz]
-    
+
     print(f"   ✓ Gaussian kernels applied to {n_beads} beads")
     return electron_density, voxel_edges
 
@@ -554,10 +597,10 @@ def gaussian_in_cell(beads_positions, beads_weights, beads_radius,
 def compute_structure_factor(beads_positions, beads_types, box_lengths, q_max, q_min, dq, density_method="default"):
     """
     Compute structure factor using FFT-based method with various density assignment schemes.
-    
+
     This function calculates the small-angle X-ray scattering (SAXS) structure factor S(q)
     by building an electron density grid and computing its Fourier transform.
-    
+
     Parameters:
     -----------
     beads_positions : np.ndarray
@@ -574,7 +617,7 @@ def compute_structure_factor(beads_positions, beads_types, box_lengths, q_max, q
         q-spacing for binning
     density_method : str
         Method for density assignment: "default", "cic", "voxelization", "dummy_in_cell", "gaussian_in_cell"
-        
+
     Returns:
     --------
     q_bin_centers : np.ndarray
@@ -592,7 +635,7 @@ def compute_structure_factor(beads_positions, beads_types, box_lengths, q_max, q
     box_lengths = np.asarray(box_lengths)
 
     # Extract box dimensions and calculate system volume
-    Lx, Ly, Lz = box_lengths  # Angstrom 
+    Lx, Ly, Lz = box_lengths  # Angstrom
     sysvol = np.prod(box_lengths * 1e-10*1e2)  # Convert to cm^3
 
     # Compute grid size based on maximum q-value (Nyquist criterion)
@@ -617,7 +660,7 @@ def compute_structure_factor(beads_positions, beads_types, box_lengths, q_max, q
             100, num_points_x, num_points_y, num_points_z, box_lengths
         )
     elif density_method == "gaussian_in_cell":
-        # Gaussian density method using analytical Gaussian distributions    
+        # Gaussian density method using analytical Gaussian distributions
         electron_density, voxel_edges = gaussian_in_cell(
             beads_positions, beads_weight, beads_radius,
             num_points_x, num_points_y, num_points_z, box_lengths
@@ -644,7 +687,7 @@ def compute_structure_factor(beads_positions, beads_types, box_lengths, q_max, q
     print(f"\n\tVoxel volume of {voxel_volume:.3e} A³, side length {voxel_edges[0][1] - voxel_edges[0][0]:.3e} A")
     print(f"\n\tFrame with {beads_positions.shape[0]} beads and {np.sum(beads_weight)} electrons")
     print(f"\tFrame electron density: {np.mean(electron_density)/voxel_volume:.2e} e-.A-3")
-    
+
     # Compute contrast density (subtract solvent background)
     contrast_density = electron_density - rho_0*voxel_volume
 
@@ -664,8 +707,8 @@ def compute_structure_factor(beads_positions, beads_types, box_lengths, q_max, q
 
     # Perform spherical averaging to convert 3D intensity to 1D I(q)
     # Reduce q_max slightly to avoid edge effects in FFT
-    q_max = np.max(q_magnitude) * 0.9  
-    
+    q_max = np.max(q_magnitude) * 0.9
+
     # Bin the 3D intensity by q-magnitude using histogram weighting
     h, edges = np.histogram(
         q_magnitude.ravel(),
@@ -693,7 +736,7 @@ def compute_structure_factor(beads_positions, beads_types, box_lengths, q_max, q
     if q_bin_centers.shape != intensity_absolute.shape:
         print("error of shape")
         return False
-    
+
     mask = intensity_absolute != 0
 
     return q_bin_centers[mask], intensity_absolute[mask]
@@ -702,10 +745,10 @@ def compute_structure_factor(beads_positions, beads_types, box_lengths, q_max, q
 def count_pattern_simple_chunked(filename, pattern, chunk_size=2**24):
     """
     Count occurrences of a pattern in a file using chunked reading for memory efficiency.
-    
+
     This function handles compressed files (.gz, .zst, .zstd) and processes large files
     in chunks to avoid memory issues when counting specific patterns like "ITEM: TIMESTEP".
-    
+
     Parameters:
     -----------
     filename : str
@@ -714,7 +757,7 @@ def count_pattern_simple_chunked(filename, pattern, chunk_size=2**24):
         String pattern to count
     chunk_size : int
         Size of chunks to read at once (default: 16MB)
-        
+
     Returns:
     --------
     int : Number of pattern occurrences found
@@ -727,7 +770,7 @@ def count_pattern_simple_chunked(filename, pattern, chunk_size=2**24):
             my_open = zstd.open
         else:
             my_open = open
-            
+
         with my_open(filename, 'rt', encoding='utf-8') as f:
             count = 0
             while True:
@@ -752,11 +795,11 @@ def count_pattern_simple_chunked(filename, pattern, chunk_size=2**24):
 def read_lammps_dump_npt(filename, ts_in_file, skip_every_ts, number_atoms):
     """
     Read and parse a LAMMPS dump file from NPT ensemble simulations.
-    
+
     This function handles trajectory files with varying box sizes (NPT ensemble)
     and implements robust error handling for incomplete or corrupted timesteps.
     It supports compressed files and memory-efficient processing.
-    
+
     Parameters:
     -----------
     filename : str
@@ -767,14 +810,14 @@ def read_lammps_dump_npt(filename, ts_in_file, skip_every_ts, number_atoms):
         Skip factor - keep only every nth frame
     number_atoms : int
         Expected number of atoms per frame
-        
+
     Returns:
     --------
     boxes : np.ndarray
         Box dimensions for each frame, shape (n_used_frames, 3)
     data_list : np.ndarray
         Trajectory data, shape (n_used_frames, number_atoms, 9)
-        
+
     Notes:
     ------
     - If a timestep is repeated, overwrites its data and zeros out subsequent data
@@ -837,6 +880,15 @@ def read_lammps_dump_npt(filename, ts_in_file, skip_every_ts, number_atoms):
                     output_idx += 1
                     boxes[output_idx] = box_data
             if "ITEM: ATOMS" in line:
+                # extract column headers (not used here but could be validated)
+                columns = line.strip().split()[2:]
+                data_cols_len = len(columns)
+                if "id mol type x y z" in line and data_cols_len >= 6:
+                    pass
+                else:
+                    print(f"Unexpected atom line format at timestep {ts}: {line}")
+                    continue
+
                 # Skip atom data if this timestep is not being kept
                 if (ts) % skip_every_ts != 0:
                     try:
@@ -844,10 +896,10 @@ def read_lammps_dump_npt(filename, ts_in_file, skip_every_ts, number_atoms):
                     except:
                         break
                     continue
-                    
+
                 # Read atom data for this timestep
                 add_data = True
-                data = np.zeros((N, 9), dtype=float)
+                data = np.zeros((N, data_cols_len), dtype=float)
                 for j in range(N):
                     atom_line = f.readline()
                     if not atom_line:
@@ -856,13 +908,16 @@ def read_lammps_dump_npt(filename, ts_in_file, skip_every_ts, number_atoms):
                         break
                     data_tmp = [float(k) for k in atom_line.split()]
                     num_cols = len(data_tmp)
-                    if num_cols != 9:
+                    if num_cols != data_cols_len:
                         print(f"Incomplete line at timestep {ts} with {num_cols} columns. Skipping.")
                         add_data = False
                         break
                     data[j, :] = data_tmp
                 # Store valid data and mark this index as filled
                 if add_data:
+                    # add zero padding if fewer than 9 columns
+                    if data_cols_len < 9:
+                        data = np.pad(data, ((0, 0), (0, 9 - data_cols_len)), 'constant')
                     data_list[output_idx, :, :] = data
                     filled_indices.add(output_idx)
 
@@ -881,19 +936,19 @@ def read_lammps_dump_npt(filename, ts_in_file, skip_every_ts, number_atoms):
 def count_atoms(filename):
     """
     Extract the number of atoms from the first frame of a LAMMPS dump file.
-    
+
     This function reads through the file until it finds the first "ITEM: NUMBER OF ATOMS"
     entry and returns that count. Supports compressed files.
-    
+
     Parameters:
     -----------
     filename : str
         Path to the LAMMPS dump file
-        
+
     Returns:
     --------
     int : Number of atoms per frame
-    
+
     Raises:
     -------
     ValueError : If no "ITEM: NUMBER OF ATOMS" found in file
@@ -918,20 +973,20 @@ def count_atoms(filename):
 def binned_mean_with_error(x, y, bin_width=2):
     """
     Compute binned statistics with error bars for scattered data.
-    
+
     This function bins x-y data into regular intervals and computes mean and
     standard error for each bin. Useful for averaging noisy data or multiple
     measurements at similar x-values.
-    
+
     Parameters:
     -----------
     x : np.ndarray
         Independent variable values
-    y : np.ndarray  
+    y : np.ndarray
         Dependent variable values
     bin_width : float
         Width of bins for averaging
-        
+
     Returns:
     --------
     bin_centers : np.ndarray
@@ -988,7 +1043,7 @@ def compute_one_structure_factor(typestodo, framenb, traj, boxes, q_max, q_min, 
         "fft" (default) or "direct".
     accelerator : str, optional
         "default", "cuda", or "mlx".
-    
+
     Returns
     -------
     tuple of np.ndarray

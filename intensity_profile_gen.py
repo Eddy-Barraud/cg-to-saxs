@@ -21,7 +21,7 @@ from workers import rc  # Import conversion factor
 # Physical constants and simulation parameters
 # Note: rc is now defined in workers.py
 restart = True  # Whether to restart from saved trajectory data
-skip_every_ts = 1  # Process every nth timestep to reduce computation
+skip_every_ts = 100  # Process every nth timestep to reduce computation
 if len(sys.argv) < 2:
     print("Usage: python intensity_profile_gen.py <trajectory_file>")
     sys.exit(1)
@@ -29,10 +29,10 @@ traj_path = f"{sys.argv[1]}"  # Path to trajectory file from command line argume
 
 # Set the q-max value for scattering calculation
 # Warning: The higher the q_max, the more computationally intensive the calculation
-q_max = 4  # Maximum q value (1/Angstrom)
+q_max = 10  # Maximum q value (1/Angstrom)
 # q_min is automatically set based on box size (see below)
-dq=0.007                   # controls resolution of q values of the 1D output histogram
-density_method="voxelization"  # Method for density assignment: "default", "cic", "voxelization", "dummy_in_cell", "gaussian_in_cell"
+dq=0.005                   # controls resolution of q values of the 1D output histogram
+density_method="dummy_in_cell"  # Method for density assignment: "default", "cic", "voxelization", "dummy_in_cell", "gaussian_in_cell"
 
 # Define which atom types to include in scattering calculation
 typestodo = np.array([1, 2, 3, 4, 5, 6])
@@ -43,15 +43,15 @@ typestodo = np.array([1, 2, 3, 4, 5, 6])
 # ===================================================================
 
 if __name__ == '__main__':
-    
+
     print(f"\nProcessing trajectory: {traj_path}\n")
 
     # ===================================================================
     # TRAJECTORY LOADING AND PREPROCESSING
     # ===================================================================
-    
+
     # Generate output filenames based on input trajectory
-    basename = traj_path.rsplit('.', 2)[0]  # Remove double extension (.tar.gz, .dump.zst, etc.)
+    basename = traj_path.rsplit('.', 2)[0] if traj_path.endswith(('.gz', '.zst')) else traj_path.rsplit('.', 1)[0]
     save_trj = basename + ".npz"
 
     # Attempt to load preprocessed trajectory data
@@ -85,7 +85,7 @@ if __name__ == '__main__':
     # ===================================================================
     # COORDINATE TRANSFORMATION AND UNIT CONVERSION
     # ===================================================================
-    
+
     # Apply periodic boundary conditions (wrap coordinates into [0, L_i])
     data[..., 3:6] %= boxes[:, np.newaxis, :]
     # Convert from reduced units to real units (Angstroms)
@@ -93,14 +93,14 @@ if __name__ == '__main__':
     boxes *= rc
 
     N = len(data[0])  # Number of beads per frame
-    
+
     # Set q-range for scattering calculation
     q_min = 2*np.pi/(np.max(boxes))  # Minimum q limited by box size
 
     # ===================================================================
     # STRUCTURE FACTOR CALCULATION LOOP
     # ===================================================================
-    
+
     # Initialize storage for results from all frames
     q_values_agg = []
     s_q_agg = []
@@ -108,16 +108,16 @@ if __name__ == '__main__':
     # Process each trajectory frame
     for framenb in range(ts_in_file):
         print(f"S(Q) progress: frame {framenb+1} / {ts_in_file}", end="\r")
-        
+
         # Compute structure factor for this frame
         q_values_manual, avg_structure_factor = compute_one_structure_factor(
-            typestodo, framenb, data, boxes, q_max, q_min, 
-            dq=dq,                    # q-spacing 
+            typestodo, framenb, data, boxes, q_max, q_min,
+            dq=dq,                    # q-spacing
             density_method=density_method,  # Use dummy particle method
             method="fft",                # Use FFT-based calculation
             accelerator="default"        # Use CPU implementation
         )
-        
+
         # Store results
         q_values_agg.append(q_values_manual)
         s_q_agg.append(avg_structure_factor)
@@ -156,7 +156,7 @@ if __name__ == '__main__':
 
     # Final plot formatting and save
     plt.tight_layout()
-    
+
     # Save plot
     plot_filename = basename + ".i_q_"+density_method+".png"
     plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
